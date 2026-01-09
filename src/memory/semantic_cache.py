@@ -27,7 +27,7 @@ class SemanticCache:
         host: str = None,
         port: int = None,
         collection_name: str = "dataset_cache",
-        vector_size: int = 768,
+        vector_size: int = 1536,
         ttl_hours: int = 24,
     ):
         self.host = host or os.getenv("QDRANT_HOST", "qdrant")
@@ -45,17 +45,26 @@ class SemanticCache:
         self._ensure_collection()
 
     def _ensure_collection(self):
-        collections = {
-            c.name for c in self.client.get_collections().collections
-        }
-        if self.collection_name not in collections:
-            self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(
-                    size=self.vector_size,
-                    distance=Distance.COSINE,
-                ),
-            )
+        try:
+            # Check if collection exists
+            collection_info = self.client.get_collection(self.collection_name)
+            
+            # Check dimension mismatch
+            if collection_info.config.params.vectors.size != self.vector_size:
+                print(f"⚠️ Dimension Mismatch (Expected: {self.vector_size}, Found: {collection_info.config.params.vectors.size}). Recreating collection...")
+                self.client.delete_collection(self.collection_name)
+                raise ValueError("Recreating") # Trigger creation below
+                
+        except Exception:
+            # Create if missing or deleted
+            if not self.client.collection_exists(self.collection_name):
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=VectorParams(
+                        size=self.vector_size,
+                        distance=Distance.COSINE,
+                    ),
+                )
 
     def save_episode(self, ticker: str, summary: str, embedding: list, recommendation: str, confidence: str, last_price: float, predictions: dict):
         """

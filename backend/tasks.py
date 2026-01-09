@@ -114,9 +114,9 @@ async def run_training(task_id: str, fn, *args, chain_fn=None):
     """Start training in background and return immediately."""
     task_id = task_id.lower()
     
-    # Check if already running using Redis
+    # Check if already running or completed using Redis
     current_status = get_task_status_redis(task_id)
-    if current_status and current_status.get("status") == "running":
+    if current_status and current_status.get("status") in ["running", "completed"]:
         return
         
     # Set initial status

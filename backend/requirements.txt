@@ -16,10 +16,10 @@ psutil
 feast
 langgraph
 langchain
-langchain-ollama
+
 langchain-community
 qdrant-client>=1.7.0
 dnspython
 requests
-langchain-google-genai
+langchain-aws
 plotly

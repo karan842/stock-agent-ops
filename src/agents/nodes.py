@@ -6,7 +6,11 @@ Agent nodes for:
 """
 from datetime import datetime
 import os
+from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, AIMessage
+import re
+
+load_dotenv()
 
 from src.agents.tools import get_stock_predictions, get_stock_news, TOOLS_LIST
 from logger.logger import get_logger
@@ -14,22 +18,32 @@ from logger.logger import get_logger
 logger = get_logger()
 
 
-# LLM setup (Ollama)
+# LLM setup (AWS Bedrock - Llama 3 70B)
 try:
-    from langchain_ollama import ChatOllama
+    from langchain_aws import ChatBedrock
 
-    llm = ChatOllama(
-        model="gpt-oss:20b-cloud",
-        temperature=0.3,
-        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    # Using OpenAI GPT-OSS 20B on Bedrock
+    llm = ChatBedrock(
+        model_id="openai.gpt-oss-20b-1:0",
+        model_kwargs={"temperature": 0.3},
+        region_name=os.getenv("AWS_REGION"),
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
     ).bind_tools(TOOLS_LIST)
 
 except Exception as e:
-    print(f"⚠️ LLM Init Error: {e}")
+    err_msg = str(e)
+    print(f"⚠️ LLM Init Error: {err_msg}")
     class Mock:
         def invoke(self, *args, **kwargs):
-            return AIMessage(content=f"Mock response: LLM unavailable. Error: {e}")
+            return AIMessage(content=f"Mock response: LLM unavailable. Error: {err_msg}")
     llm = Mock()
+
+
+def clean_content(text: str) -> str:
+    """Removes <reasoning>...</reasoning> tags from the output."""
+    cleanup = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL)
+    return cleanup.strip()
 
 
 # --------------------------------------------------------------------------
@@ -56,6 +70,9 @@ def performance_analyst_node(state: dict) -> dict:
     """
     resp = llm.invoke([SystemMessage(content=prompt)])
     content = resp.content if hasattr(resp, "content") else str(resp)
+    content = clean_content(content)
+    if hasattr(resp, "content"):
+        resp.content = content
     logger.info(f"DEBUG: Perf Output: {content[:100]}...")
     
     return {
@@ -82,6 +99,9 @@ Return a 3–5 line sentiment summary.
 """
     resp = llm.invoke([SystemMessage(content=prompt)])
     content = resp.content if hasattr(resp, "content") else str(resp)
+    content = clean_content(content)
+    if hasattr(resp, "content"):
+        resp.content = content
     logger.info(f"DEBUG: News Output: {content[:100]}...")
 
     return {
@@ -112,6 +132,9 @@ End with: **Market Stance:** BULLISH/BEARISH/NEUTRAL | **Confidence:** High/Medi
 """
     resp = llm.invoke([SystemMessage(content=prompt)])
     text = resp.content if hasattr(resp, "content") else str(resp)
+    text = clean_content(text)
+    if hasattr(resp, "content"):
+        resp.content = text
     logger.info(f"DEBUG: Report Gen Output: {text[:100]}...")
 
     # Extract stance
@@ -170,6 +193,9 @@ def critic_node(state: dict) -> dict:
     
     resp = llm.invoke([SystemMessage(content=prompt)])
     final_text = resp.content if hasattr(resp, "content") else str(resp)
+    final_text = clean_content(final_text)
+    if hasattr(resp, "content"):
+        resp.content = final_text
     logger.info(f"DEBUG: Critic Output: {final_text[:100]}...")
 
     # We treat the critic's output as the definitive 'final_report'

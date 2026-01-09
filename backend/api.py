@@ -105,7 +105,8 @@ def analyze(req: AnalyzeRequest):
     try:
         return analyze_stock(req.ticker, thread_id=req.thread_id)
     except Exception as e:
-        raise HTTPException(500, f"Analysis failed: {e}")
+        logger.error(f"Analysis failed: {e}", exc_info=True)
+        raise HTTPException(500, "Internal Server Error: Analysis failed")
 
 # =========================================================
 # Training Endpoints
@@ -114,57 +115,93 @@ def analyze(req: AnalyzeRequest):
 @rate_limit(limit=5, window_sec=3600, key_prefix="train_parent")
 async def train_parent_endpoint():
     """Trigger parent model training."""
-    task_id = "parent_training"
-    
-    # Check if Parent Model already exists
-    if check_model_exists("parent", "parent"):
-        return {"status": "completed", "task_id": task_id, "detail": "Parent model already exists"}
+    try:
+        task_id = "parent_training"
+        
+        # Check if Parent Model already exists
+        if check_model_exists("parent", "parent"):
+            return {"status": "completed", "task_id": task_id, "detail": "Parent model already exists"}
 
-    if get_task_status_redis(task_id) and get_task_status_redis(task_id).get("status") == "running":
-         return {"status": "already running", "task_id": task_id}
-         
-    await run_training(task_id, train_parent)
-    return {"status": "started", "task_id": task_id}
+        if get_task_status_redis(task_id) and get_task_status_redis(task_id).get("status") == "running":
+             return {"status": "already running", "task_id": task_id}
+             
+        await run_training(task_id, train_parent)
+        return {"status": "started", "task_id": task_id}
+    except Exception as e:
+        logger.error(f"Train Parent failed: {e}", exc_info=True)
+        raise HTTPException(500, "Internal Server Error: Training initiation failed")
 
 @router.post("/train-child")
 @rate_limit(limit=5, window_sec=3600, key_prefix="train_child")
 async def train_child_endpoint(request: Request):
     """Trigger child model training."""
-    data = await request.json()
-    ticker = data.get("ticker", "").strip().upper()
-    if not ticker:
-        raise HTTPException(400, "ticker is required")
+    try:
+        data = await request.json()
+        ticker = data.get("ticker", "").strip().upper()
+        if not ticker:
+            raise HTTPException(400, "ticker is required")
+            
+        task_id = ticker.lower()
         
-    task_id = ticker.lower()
-    
-    # Check if Parent Model exists
-    cfg = Config()
-    parent_path = os.path.join(cfg.parent_dir, f"{cfg.parent_ticker}_parent_model.pt")
-    
-    if not os.path.exists(parent_path):
-        logger.warning("Parent model missing. Triggering parent training first.")
-        parent_status = get_task_status_redis("parent_training")
-        if not parent_status or parent_status.get("status") != "completed":
-             await run_training("parent_training", train_parent)
-             parent_status = get_task_status_redis("parent_training")
-             if parent_status and parent_status.get("status") == "running":
-                 return {"status": "started_parent", "task_id": "parent_training", "detail": "Parent model missing. Training parent first."}
-    
-    # Check if Child Model already exists
-    if check_model_exists(ticker, "child"):
-        return {"status": "completed", "task_id": task_id, "detail": "Model already exists"}
+        # Check if Parent Model exists
+        cfg = Config()
+        parent_path = os.path.join(cfg.parent_dir, f"{cfg.parent_ticker}_parent_model.pt")
+        
+        if not os.path.exists(parent_path):
+            logger.warning("Parent model missing. Triggering parent training first.")
+            parent_status = get_task_status_redis("parent_training")
+            if not parent_status or parent_status.get("status") != "completed":
+                 await run_training("parent_training", train_parent)
+                 parent_status = get_task_status_redis("parent_training")
+                 if parent_status and parent_status.get("status") == "running":
+                     return {"status": "started_parent", "task_id": "parent_training", "detail": "Parent model missing. Training parent first."}
+        
+        # Check if Child Model already exists
+        if check_model_exists(ticker, "child"):
+            return {"status": "completed", "task_id": task_id, "detail": "Model already exists"}
 
-    curr_status = get_task_status_redis(task_id)
-    if curr_status and curr_status.get("status") == "running":
-        return {"status": "running", "task_id": task_id, "detail": "Training already in progress"}
+        # Check if THIS task is running
+        curr_status = get_task_status_redis(task_id)
+        if curr_status and curr_status.get("status") == "running":
+            return {"status": "running", "task_id": task_id, "detail": "Training already in progress for this ticker"}
 
-    def chain_predict():
-        # Chain prediction and caching after training
-        logger.info(f"Auto-predicting for {ticker} after training...")
-        get_or_set_cache(f"predict_child_{ticker.lower()}", lambda: predict_child(ticker), expire=86400)
+        # GLOBAL CHECK: Is ANY child model training?
+        if redis_client:
+            # Scan for all task keys
+            keys = redis_client.keys("task_status:*")
+            for k in keys:
+                key_str = k.decode('utf-8')
+                tid = key_str.split(":", 1)[1]
+                
+                # Skip parent training
+                if tid == "parent_training":
+                    continue
+                
+                # Check if its running
+                val = redis_client.get(k)
+                if val:
+                    s = json.loads(val)
+                    if s.get("status") == "running":
+                        # Found another child training
+                        return {
+                            "status": "busy", 
+                            "task_id": task_id, 
+                            "blocking_task": tid,
+                            "detail": f"System is currently training '{tid.upper()}'. Please wait."
+                        }
 
-    await run_training(task_id, train_child, ticker, chain_fn=chain_predict)
-    return {"status": "started", "task_id": task_id}
+        def chain_predict():
+            # Chain prediction and caching after training
+            logger.info(f"Auto-predicting for {ticker} after training...")
+            get_or_set_cache(f"predict_child_{ticker.lower()}", lambda: predict_child(ticker), expire=86400)
+
+        await run_training(task_id, train_child, ticker, chain_fn=chain_predict)
+        return {"status": "started", "task_id": task_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Train Child failed: {e}", exc_info=True)
+        raise HTTPException(500, "Internal Server Error: Training initiation failed")
 
 # =========================================================
 # Prediction Endpoints
@@ -180,7 +217,8 @@ async def predict_parent_endpoint():
         PREDICTION_LATENCY.labels(type="parent").observe(time.time() - start_time)
         return {"result": result}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Predict Parent failed: {e}", exc_info=True)
+        raise HTTPException(500, "Internal Server Error")
 
 @router.post("/predict-child")
 @rate_limit(limit=40, window_sec=3600, key_prefix="predict_child")
@@ -229,9 +267,10 @@ async def predict_child_endpoint(request: Request, response: Response):
             response.status_code = 202
             return {"status": "training", "detail": f"Model for {ticker} missing. Training started (with auto-prediction).", "task_id": task_id}
             
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, "Internal Server Error")
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Predict Child failed: {e}", exc_info=True)
+        raise HTTPException(500, "Internal Server Error")
 
 # =========================================================
 # System / Monitoring Endpoints

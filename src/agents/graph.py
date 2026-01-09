@@ -3,6 +3,8 @@ LangGraph assembly + analyze_stock wrapper.
 No optional Finnhub settings.
 """
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from langgraph.graph import StateGraph, MessagesState, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage
@@ -16,9 +18,9 @@ from src.agents.nodes import (
 from src.memory.semantic_cache import SemanticCache
 
 try:
-    from langchain_ollama import OllamaEmbeddings
+    from langchain_aws import BedrockEmbeddings
 except ImportError:
-    OllamaEmbeddings = None
+    BedrockEmbeddings = None
 
 
 class AgentState(MessagesState):
@@ -54,18 +56,22 @@ def analyze_stock(ticker: str, thread_id: str = None):
     ticker_upper = ticker.upper()
     
     # Initialize Embedding Model
+    # Initialize Embedding Model
+    # Initialize Embedding Model
     embedder = None
-    if OllamaEmbeddings:
+    if BedrockEmbeddings:
         try:
-            ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            embedder = OllamaEmbeddings(
-                model="nomic-embed-text", 
-                base_url=ollama_url
+            embedder = BedrockEmbeddings(
+                model_id="amazon.titan-embed-text-v1",
+                region_name=os.getenv("AWS_REGION"),
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
             )
         except Exception:
             pass
 
     # Initialize Memory
+    query_vec = None
     if embedder:
         try:
             # Relies on QDRANT_HOST env var or defaults to 'qdrant'
@@ -99,7 +105,11 @@ def analyze_stock(ticker: str, thread_id: str = None):
                         "predictions": cached_payload.get("predictions", {})
                     }
         except Exception as e:
-            print(f"⚠️ Semantic Cache Error: {e}")
+            err_str = str(e)
+            if "429" in err_str:
+                print(f"⚠️ Semantic Cache Skipped: Quota Exceeded (AWS Bedrock)")
+            else:
+                print(f"⚠️ Semantic Cache Error: {e}")
 
     # ---------------------------------------------------------
     # 2. FETCH DATA & RUN AGENT
@@ -167,7 +177,7 @@ def analyze_stock(ticker: str, thread_id: str = None):
     # ---------------------------------------------------------
     # 3. SAVE TO CACHE
     # ---------------------------------------------------------
-    if embedder and "final_report" in result:
+    if embedder and "final_report" in result and query_vec:
         try:
             # Extract metadata
             rec = result.get("recommendation", "Neutral")
