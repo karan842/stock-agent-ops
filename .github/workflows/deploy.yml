@@ -2,7 +2,7 @@ name: Deploy to Production
 
 on:
   push:
-    branches: [ "aws-deployment" ]
+    branches: [ "main", "aws-deployment" ]
   workflow_dispatch:
 
 env:
@@ -13,8 +13,46 @@ env:
   EKS_CLUSTER_NAME: mlops-stock-cluster
 
 jobs:
-  deploy:
-    name: Build and Deploy
+  infrastructure:
+    name: Provision Infrastructure
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      with:
+        terraform_version: 1.5.0
+
+    - name: Terraform Init
+      run: terraform init
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve -var="aws_region=${{ env.AWS_REGION }}"
+
+    - name: Get ECR Registry
+      id: ecr-registry
+      run: echo "registry=$(terraform output -raw account_id).dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_OUTPUT
+
+    outputs:
+      ecr_registry: ${{ steps.ecr-registry.outputs.registry }}
+
+  deploy_apps:
+    name: Build and Deploy Apps
+    needs: infrastructure
     runs-on: ubuntu-latest
     environment: production
 
@@ -33,27 +71,30 @@ jobs:
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    - name: Build, tag, and push FastAPI image to Amazon ECR
+    # Define registry from `needs` or derive it again (deriving is safer if separate jobs)
+    # Using the output from infrastructure job
+    
+    - name: Build and Push FastAPI
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest ./backend
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest
 
-    - name: Build, tag, and push Frontend image to Amazon ECR
+    - name: Build and Push Frontend
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest ./frontend
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest
 
-    - name: Build, tag, and push Monitoring image to Amazon ECR
+    - name: Build and Push Monitoring
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:latest ./monitoring_app
@@ -83,42 +124,26 @@ jobs:
           FINNHUB_API_KEY: $(echo -n "${{ secrets.FINNHUB_API_KEY }}" | base64)
         EOF
 
-    - name: Update Image Tags in K8s Manifests
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ github.sha }}
-      run: |
-        # Replace <AWS_ACCOUNT_ID> placeholder with actual registry root
-        sed -i "s|<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com|$ECR_REGISTRY|g" k8s/*.yaml
-        
-        # (Optional) Update to specific SHA tag if you want immutable deployments, 
-        # but for now we are pushing 'latest' as well so the manifest matches.
-        # If we wanted to use specific SHA:
-        # sed -i "s|:latest|:$IMAGE_TAG|g" k8s/*.yaml
-
     - name: Deploy to EKS
+      env:
+        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
       run: |
-        # Ensure namespace exists
+        # Update manifest images
+        sed -i "s|<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com|$ECR_REGISTRY|g" k8s/*.yaml
+
+        # Deploy
         kubectl apply -f k8s/namespace.yaml
-        
-        # Apply secrets first
         kubectl apply -f k8s/secrets.yaml
-        
-        # Apply storage/volumes
         kubectl apply -f k8s/volumes.yaml
-        
-        # Apply other infrastructure components
         kubectl apply -f k8s/redis.yaml
         kubectl apply -f k8s/qdrant.yaml
         kubectl apply -f k8s/prometheus.yaml
         kubectl apply -f k8s/grafana.yaml
-        
-        # Apply apps
         kubectl apply -f k8s/fastapi.yaml
         kubectl apply -f k8s/frontend.yaml
         kubectl apply -f k8s/monitoring-app.yaml
-        
-        # Force restart to pick up new images if using 'latest' tag
+
+        # Restart deployments to pick up new images
         kubectl rollout restart deployment/fastapi -n mlops
         kubectl rollout restart deployment/frontend -n mlops
         kubectl rollout restart deployment/monitoring-app -n mlops
