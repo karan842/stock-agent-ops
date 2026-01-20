@@ -29,3 +29,6 @@ outputs/
 *.db 
 grafana/
 
+
+k8s/secrets.yaml
+secrets.yaml

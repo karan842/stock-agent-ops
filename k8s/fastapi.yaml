@@ -1,7 +1,14 @@
+# =============================================================================
+# FastAPI Backend Deployment
+# =============================================================================
+# NOTE: Replace <AWS_ACCOUNT_ID> with your actual AWS account ID
+# Or use: sed -i 's/<AWS_ACCOUNT_ID>/123456789012/g' k8s/*.yaml
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: fastapi
+  namespace: mlops
 spec:
   replicas: 1
   selector:
@@ -14,8 +21,9 @@ spec:
     spec:
       containers:
       - name: fastapi
-        image: stock-agent-ops-fastapi:latest
-        imagePullPolicy: Never
+        # Replace with your ECR URL after terraform apply
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/mlops-fastapi:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
         env:
@@ -23,6 +31,13 @@ spec:
           value: "redis"
         - name: REDIS_PORT
           value: "6379"
+        - name: QDRANT_HOST
+          value: "qdrant"
+        - name: QDRANT_PORT
+          value: "6333"
+        envFrom:
+        - secretRef:
+            name: mlops-secrets
         resources:
           requests:
             cpu: "500m"
@@ -54,6 +69,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: fastapi
+  namespace: mlops
 spec:
   type: LoadBalancer
   ports:

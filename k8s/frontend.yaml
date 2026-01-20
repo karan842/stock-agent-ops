@@ -1,7 +1,13 @@
+# =============================================================================
+# Frontend (Streamlit) Deployment
+# =============================================================================
+# NOTE: Replace <AWS_ACCOUNT_ID> with your actual AWS account ID
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
+  namespace: mlops
 spec:
   replicas: 1
   selector:
@@ -14,8 +20,9 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: stock-agent-ops-frontend:latest
-        imagePullPolicy: Never
+        # Replace with your ECR URL after terraform apply
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/mlops-frontend:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8501
         env:
@@ -33,6 +40,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
+  namespace: mlops
 spec:
   type: LoadBalancer
   ports:

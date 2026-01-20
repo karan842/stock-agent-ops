@@ -1,7 +1,13 @@
+# =============================================================================
+# Monitoring Dashboard (Streamlit) Deployment
+# =============================================================================
+# NOTE: Replace <AWS_ACCOUNT_ID> with your actual AWS account ID
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: monitoring-app
+  namespace: mlops
 spec:
   replicas: 1
   selector:
@@ -14,8 +20,9 @@ spec:
     spec:
       containers:
       - name: monitoring-app
-        image: stock-agent-ops-monitoring:latest
-        imagePullPolicy: Never
+        # Replace with your ECR URL after terraform apply
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/mlops-monitoring:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8502
         env:
@@ -28,11 +35,19 @@ spec:
           limits:
             cpu: "300m"
             memory: "512Mi"
+        volumeMounts:
+        - name: outputs-volume
+          mountPath: /app/outputs
+      volumes:
+      - name: outputs-volume
+        persistentVolumeClaim:
+          claimName: mlops-outputs-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: monitoring-app
+  namespace: mlops
 spec:
   type: LoadBalancer
   ports:

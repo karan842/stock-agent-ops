@@ -1,7 +1,12 @@
+# =============================================================================
+# Qdrant Deployment
+# =============================================================================
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: qdrant
+  namespace: mlops
 spec:
   replicas: 1
   selector:
@@ -17,13 +22,14 @@ spec:
         image: qdrant/qdrant:latest
         ports:
         - containerPort: 6333
+        - containerPort: 6334
         resources:
           requests:
-            cpu: "200m"
-            memory: "512Mi"
+            cpu: "100m"
+            memory: "256Mi"
           limits:
-            cpu: "500m"
-            memory: "1Gi"
+            cpu: "300m"
+            memory: "512Mi"
         volumeMounts:
         - name: qdrant-storage
           mountPath: /qdrant/storage
@@ -36,9 +42,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: qdrant
+  namespace: mlops
 spec:
   ports:
-  - port: 6333
+  - name: http
+    port: 6333
     targetPort: 6333
+  - name: grpc
+    port: 6334
+    targetPort: 6334
   selector:
     app: qdrant
