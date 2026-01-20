@@ -21,7 +21,7 @@ ENV ORT_LOGGING_LEVEL=ERROR
 COPY . /app
 
 # Install dependencies via uv (system-wide)
-RUN uv pip install --system -r backend/requirements.txt
+RUN uv pip install --system -r requirements.txt
 
 # Expose the FastAPI port
 EXPOSE 8000
