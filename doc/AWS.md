@@ -1,237 +1,487 @@
-# AWS EKS Deployment Guide: Minimal & Cost-Effective
+# AWS EKS Deployment Guide
 
-This guide covers deploying the MLOps pipeline to AWS EKS (Kubernetes) using a "Minimal Viable Infrastructure" approach. We will use **Terraform** for infrastructure, **GitHub Actions** for CI/CD, and **ECR** for images.
+Complete guide to deploy the MLOps Stock Prediction Pipeline to AWS EKS using Terraform.
 
 ---
 
-## 1. Prerequisites
-Ensure you have these CLI tools installed:
-*   `aws` (AWS CLI v2)
-*   `kubectl` (Kubernetes CLI)
-*   `terraform` (Infrastructure as Code)
-*   `docker` (For local builds)
+## Table of Contents
 
-**Configure AWS:**
+1. [Prerequisites](#prerequisites)
+2. [Quick Start](#quick-start)
+3. [Infrastructure Setup (Terraform)](#infrastructure-setup-terraform)
+4. [Build & Push Docker Images (ECR)](#build--push-docker-images-ecr)
+5. [Deploy to Kubernetes (EKS)](#deploy-to-kubernetes-eks)
+6. [Access Applications](#access-applications)
+7. [Monitoring & Logs](#monitoring--logs)
+8. [Teardown (Kill Everything)](#teardown-kill-everything)
+9. [Troubleshooting](#troubleshooting)
+10. [Cost Estimation](#cost-estimation)
+
+---
+
+## Prerequisites
+
+### Install Required Tools
+
 ```bash
+# AWS CLI
+curl "https://awscli.amazonaws.com/AWSCLIV2.pkg" -o "AWSCLIV2.pkg"
+sudo installer -pkg AWSCLIV2.pkg -target /
+
+# Terraform
+brew install terraform
+
+# kubectl
+brew install kubectl
+
+# Docker (ensure Docker Desktop is running)
+```
+
+### Configure AWS Credentials
+
+```bash
+# Configure with your AWS Access Keys
 aws configure
-# Enter Access Key, Secret Key, Region (e.g., us-east-1)
+
+# Verify configuration
+aws sts get-caller-identity
 ```
+
+Output should show your AWS Account ID, User ARN, and User ID.
 
 ---
 
-## 2. Infrastructure (Terraform vs. Eksctl)
-*Question: Do I need Helm?*
-**Answer**: No. For this project, standard Kubernetes manifests (`.yaml` files) are sufficient. Helm is great for packaging but adds complexity you don't need yet.
+## Quick Start
 
-*Question: How to use Terraform?*
-**Answer**: We will use a minimal Terraform configuration to spawn a VPC and EKS Cluster.
-
-### A. Instance Selection (LSTM Project)
-Since you are running LSTM (PyTorch), Redis, Qdrant, and FastAPI on the same cluster:
-*   **Recommended**: `t3.xlarge` (4 vCPU, 16 GB RAM).
-    *   *Why?* Sufficient memory for Qdrant/Redis + Model loading. Cost-effective.
-*   **Alternative (Performance)**: `m5.large` or `g4dn.xlarge` (if GPU is mandatory, but expensive).
-*   **Recommendation**: Start with **Run on CPU** (`t3.xlarge`) for the 1-2 hour demo to keep costs under $1.
-
-### B. Minimal Terraform Setup
-Create a file `infra/main.tf`:
-
-```hcl
-provider "aws" {
-  region = "us-east-1"
-}
-
-module "vpc" {
-  source = "terraform-aws-modules/vpc/aws"
-  name = "mlops-vpc"
-  cidr = "10.0.0.0/16"
-  azs = ["us-east-1a", "us-east-1b"]
-  public_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
-}
-
-module "eks" {
-  source          = "terraform-aws-modules/eks/aws"
-  cluster_name    = "mlops-cluster"
-  cluster_version = "1.27"
-  vpc_id          = module.vpc.vpc_id
-  subnet_ids      = module.vpc.public_subnets
-
-  eks_managed_node_groups = {
-    one = {
-      min_size     = 1
-      max_size     = 2
-      desired_size = 1
-      instance_types = ["t3.xlarge"]
-      key_name       = "my-ssh-key" # Optional: ensure this key pair exists in AWS
-    }
-  }
-}
-```
-
-**Run Infrastructure:**
 ```bash
-cd infra
+# 1. Deploy Infrastructure (~15 min)
+cd terraform
 terraform init
 terraform apply -auto-approve
-# ⏳ Takes ~15 minutes
-```
 
-**Connect kubectl to EKS:**
-```bash
-aws eks update-kubeconfig --region us-east-1 --name mlops-cluster
-```
+# 2. Build & Push Images (~5 min)
+./scripts/push-to-ecr.sh
 
----
+# 3. Deploy to EKS (~3 min)
+./scripts/deploy-k8s.sh
 
-## 3. Container Registry (ECR)
-We need a place to store your Docker images.
-
-1.  **Create Repository:**
-    ```bash
-    aws ecr create-repository --repository-name mlops-backend
-    aws ecr create-repository --repository-name mlops-frontend
-    ```
-2.  **Login:**
-    ```bash
-    aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
-    ```
-
----
-
-## 4. CI/CD: GitHub Actions
-Automate building and pushing images upon code push.
-Create `.github/workflows/deploy.yml`:
-
-```yaml
-name: Deploy to EKS
-
-on:
-  push:
-    branches: [ "main" ]
-
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1
-
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v1
-
-    - name: Build and push Backend
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: mlops-backend
-        IMAGE_TAG: latest
-      run: |
-        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-
-    - name: Update KubeConfig
-      run: aws eks update-kubeconfig --name mlops-cluster --region us-east-1
-
-    - name: Deploy to EKS
-      run: |
-        kubectl apply -f k8s/
-        kubectl rollout restart deployment/fastapi-deployment
+# 4. Get URLs
+kubectl get svc -n mlops
 ```
 
 ---
 
-## 5. Storage Strategy (S3 & Outputs)
-*Question: Logic for outputs/ dir?*
+## Infrastructure Setup (Terraform)
 
-In a container (`Pod`), files in `/app/outputs` are lost when the Pod restarts.
-**Solution**: Use separate storage.
-
-1.  **S3 (Recommended for Artifacts)**:
-    Since you already use **MLflow (DagsHub)**, your models (`.pt`) and metrics should ideally go there. This is the cleanest MLOps approach.
-    
-2.  **S3 Sync (Minimal approach for 'outputs/')**:
-    If you specifically want files in `outputs/` synced to a private S3 bucket:
-    *   Create a bucket: `aws s3 mb s3://my-mlops-outputs`
-    *   Give your Node Group IAM role permission to write to S3.
-    *   Update `main.py` code to upload on completion:
-        ```python
-        import boto3
-        s3 = boto3.client('s3')
-        s3.upload_file("outputs/model.pt", "my-mlops-outputs", "model.pt")
-        ```
-    
-3.  **Quick Fix (PVC)**:
-    In your `k8s/deployment.yaml`, mount an AWS EBS volume to `/app/outputs`. This persists data as long as the Volume exists (even if Pod crashes).
-
----
-
-## 6. Deploying Kubernetes Manifests
-Run manually (or via GitHub Actions):
+### Step 1: Initialize Terraform
 
 ```bash
-# 1. Apply Secrets (Env vars)
+cd terraform
+
+# Copy example variables
+cp terraform.tfvars.example terraform.tfvars
+
+# Edit with your preferences (optional)
+# nano terraform.tfvars
+
+# Initialize Terraform
+terraform init
+```
+
+### Step 2: Review Plan
+
+```bash
+terraform plan
+```
+
+This will show you:
+- 1 VPC with 4 subnets
+- 1 EKS cluster with 2 nodes
+- 3 ECR repositories
+- IAM roles and policies
+
+### Step 3: Apply Infrastructure
+
+```bash
+terraform apply
+```
+
+Type `yes` when prompted. This takes approximately **15-20 minutes**.
+
+### Step 4: Configure kubectl
+
+```bash
+# Get the command from Terraform output
+terraform output configure_kubectl
+
+# Run the command (example):
+aws eks update-kubeconfig --region us-east-1 --name mlops-stock-cluster
+
+# Verify connection
+kubectl get nodes
+```
+
+---
+
+## Build & Push Docker Images (ECR)
+
+### Step 1: Login to ECR
+
+```bash
+# Get your AWS Account ID
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION="us-east-1"
+
+# Login to ECR
+aws ecr get-login-password --region $AWS_REGION | \
+  docker login --username AWS --password-stdin \
+  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+```
+
+### Step 2: Build Images
+
+```bash
+# Navigate to project root
+cd /path/to/stock-agent-ops
+
+# Build FastAPI Backend
+docker build -t mlops-fastapi:latest -f backend/Dockerfile .
+
+# Build Frontend
+docker build -t mlops-frontend:latest -f frontend/Dockerfile ./frontend
+
+# Build Monitoring Dashboard
+docker build -t mlops-monitoring:latest -f monitoring_app/Dockerfile ./monitoring_app
+```
+
+### Step 3: Tag Images
+
+```bash
+# Tag for ECR
+docker tag mlops-fastapi:latest \
+  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-fastapi:latest
+
+docker tag mlops-frontend:latest \
+  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-frontend:latest
+
+docker tag mlops-monitoring:latest \
+  $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-monitoring:latest
+```
+
+### Step 4: Push to ECR
+
+```bash
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-fastapi:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-frontend:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/mlops-monitoring:latest
+```
+
+### Step 5: Update K8s Manifests
+
+```bash
+# Replace placeholder with your Account ID in all manifests
+sed -i '' "s/<AWS_ACCOUNT_ID>/$AWS_ACCOUNT_ID/g" k8s/*.yaml
+
+# Verify replacement
+grep -r "dkr.ecr" k8s/
+```
+
+---
+
+## Deploy to Kubernetes (EKS)
+
+### Step 1: Create Namespace
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+```
+
+### Step 2: Create Secrets
+
+```bash
+# Copy secrets template
+cp k8s/secrets.yaml.example k8s/secrets.yaml
+
+# Edit with your base64-encoded values
+# To encode: echo -n "your-value" | base64
+nano k8s/secrets.yaml
+
+# Apply secrets
 kubectl apply -f k8s/secrets.yaml
-
-# 2. Deploy Services (Redis, Qdrant first)
-kubectl apply -f k8s/redis-deployment.yaml
-kubectl apply -f k8s/qdrant-deployment.yaml
-
-# 3. Deploy App
-kubectl apply -f k8s/fastapi-deployment.yaml
-kubectl apply -f k8s/frontend-deployment.yaml
-kubectl apply -f k8s/ingress.yaml
 ```
 
-*Question: Networking?*
-*   **Load Balancer**: When you apply a Service of `type: LoadBalancer` (or Ingress with ALB Controller), AWS automatically creates a Classic or Network Load Balancer. It costs ~$0.025/hour.
-*   **Access**: You will get a DNS name (e.g., `a45...us-east-1.elb.amazonaws.com`) to access your Streamlit UI.
+### Step 3: Deploy All Resources
+
+```bash
+# Apply all manifests
+kubectl apply -f k8s/volumes.yaml
+kubectl apply -f k8s/redis.yaml
+kubectl apply -f k8s/qdrant.yaml
+kubectl apply -f k8s/prometheus.yaml
+kubectl apply -f k8s/grafana.yaml
+kubectl apply -f k8s/fastapi.yaml
+kubectl apply -f k8s/frontend.yaml
+kubectl apply -f k8s/monitoring-app.yaml
+
+# Or apply all at once
+kubectl apply -f k8s/
+```
+
+### Step 4: Verify Deployment
+
+```bash
+# Check pods
+kubectl get pods -n mlops
+
+# Wait for all pods to be Running
+kubectl wait --for=condition=Ready pods --all -n mlops --timeout=300s
+
+# Check services
+kubectl get svc -n mlops
+```
 
 ---
 
-## 7. Cost Estimate (1-2 Hours)
+## Access Applications
 
-If you run this setup for just 2 hours:
+### Get LoadBalancer URLs
 
-| Resource | Logic | Est. Cost |
-| :--- | :--- | :--- |
-| **EKS Control Plane** | $0.10/hr × 2 | $0.20 |
-| **EC2 (t3.xlarge)** | $0.16/hr × 2 | $0.32 |
-| **Load Balancer** | $0.025/hr × 2 | $0.05 |
-| **EBS Volume** | 20GB ($0.08/GB/mo) / 720hrs * 2 | < $0.01 |
-| **Data Transfer** | Minimal | < $0.01 |
-| **TOTAL** | | **~ $0.60 USD** |
+```bash
+# Get all external URLs
+kubectl get svc -n mlops -o wide
 
-*Note: EKS clusters are billed pro-rata but have no startup fee.*
+# Get specific URLs
+echo "FastAPI: $(kubectl get svc fastapi -n mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'):8000"
+echo "Frontend: $(kubectl get svc frontend -n mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'):8501"
+echo "Grafana: $(kubectl get svc grafana -n mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'):3000"
+echo "Monitoring: $(kubectl get svc monitoring-app -n mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'):8502"
+```
+
+### Test Endpoints
+
+```bash
+# Get FastAPI URL
+FASTAPI_URL=$(kubectl get svc fastapi -n mlops -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+# Health check
+curl http://$FASTAPI_URL:8000/health
+
+# Analyze stock
+curl -X POST http://$FASTAPI_URL:8000/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL"}'
+```
 
 ---
 
-## 8. Pause, Destroy, Rebuild
+## Monitoring & Logs
 
-**To Pause (Stop Billing for Compute):**
+### View Pod Logs
+
 ```bash
-# Scale nodes to 0 (Stops EC2 cost, keeps EKS control plane cost)
-kubectl scale deployment --all --replicas=0
-# Update terraform node group min_size = 0
+# FastAPI logs
+kubectl logs -f deployment/fastapi -n mlops
+
+# All pods
+kubectl logs -f -l app=fastapi -n mlops
 ```
-*Warning: EKS Control Plane ($0.10/hr) charges continue even if nodes are 0.*
 
-**To Destroy (Stop ALL Billing):**
+### Access Grafana
+
+1. Get Grafana URL from services
+2. Login: `admin` / `admin`
+3. Add Prometheus data source: `http://prometheus:9090`
+
+### Check Resource Usage
+
 ```bash
-# Delete Services first (removes Load Balancers)
+kubectl top pods -n mlops
+kubectl top nodes
+```
+
+---
+
+## Teardown (Kill Everything)
+
+> ⚠️ **WARNING**: This will destroy ALL resources and data. This action is irreversible.
+
+### Step 1: Delete Kubernetes Resources
+
+```bash
+# Delete all resources in the namespace
 kubectl delete -f k8s/
 
-# Destroy Infra
-cd infra
-terraform destroy -auto-approve
+# Delete namespace
+kubectl delete namespace mlops
+
+# Verify deletion
+kubectl get all -n mlops
 ```
 
-**To Rebuild:**
-1.  `cd infra && terraform apply`
-2.  `aws eks update-kubeconfig...`
-3.  `kubectl apply -f k8s/`
+### Step 2: Delete ECR Images (REQUIRED)
+
+Terraform cannot destroy non-empty ECR repositories. You MUST run this before `terraform destroy`.
+
+```bash
+# Set your variables
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION="us-east-1"
+
+# Delete fastapi images
+aws ecr batch-delete-image \
+  --repository-name mlops-fastapi \
+  --image-ids "$(aws ecr list-images --repository-name mlops-fastapi --query 'imageIds[*]' --output json)" \
+  --region $AWS_REGION || true
+
+# Delete frontend images
+aws ecr batch-delete-image \
+  --repository-name mlops-frontend \
+  --image-ids "$(aws ecr list-images --repository-name mlops-frontend --query 'imageIds[*]' --output json)" \
+  --region $AWS_REGION || true
+
+# Delete monitoring images
+aws ecr batch-delete-image \
+  --repository-name mlops-monitoring \
+  --image-ids "$(aws ecr list-images --repository-name mlops-monitoring --query 'imageIds[*]' --output json)" \
+  --region $AWS_REGION || true
+```
+
+### Step 3: Destroy Terraform Infrastructure
+
+```bash
+cd terraform
+
+# Destroy all AWS resources
+terraform destroy
+
+# Type 'yes' when prompted
+```
+
+This will delete:
+- EKS Cluster and Node Groups
+- ECR Repositories
+- VPC, Subnets, NAT Gateway
+- IAM Roles and Policies
+- All associated resources
+
+### Step 4: Verify Complete Cleanup
+
+```bash
+# Check no EKS clusters remain
+aws eks list-clusters --region us-east-1
+
+# Check no ECR repositories remain
+aws ecr describe-repositories --region us-east-1
+
+# Check CloudWatch log groups (manual cleanup if needed)
+aws logs describe-log-groups --log-group-name-prefix /aws/eks/mlops
+```
+
+### One-Liner Kill Everything
+
+```bash
+# ⚠️ DANGER: Destroys everything without confirmation
+kubectl delete -f k8s/ --ignore-not-found && \
+kubectl delete namespace mlops --ignore-not-found && \
+cd terraform && terraform destroy -auto-approve
+```
+
+---
+
+## Troubleshooting
+
+### Pods Not Starting
+
+```bash
+# Check pod status
+kubectl describe pod <pod-name> -n mlops
+
+# Check events
+kubectl get events -n mlops --sort-by='.lastTimestamp'
+```
+
+### Image Pull Errors
+
+```bash
+# Verify ECR login
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
+
+# Check image exists
+aws ecr describe-images --repository-name mlops-fastapi --region us-east-1
+```
+
+### Node Issues
+
+```bash
+# Check node status
+kubectl describe nodes
+
+# Check node group in AWS Console
+aws eks describe-nodegroup --cluster-name mlops-stock-cluster --nodegroup-name mlops-stock-cluster-nodes
+```
+
+---
+
+## Cost Estimation
+
+| Resource | Monthly Cost (Approx) |
+|----------|----------------------|
+| EKS Control Plane | $73 |
+| 2x t3.medium Nodes | $60 |
+| NAT Gateway | $32 + data |
+| EBS Storage (9GB) | $1 |
+| Load Balancers (4x) | $65 |
+| **Total** | **~$230/month** |
+
+### Cost Saving Tips
+
+1. Use Spot instances for nodes (add to Terraform)
+2. Reduce to 1 node during development
+3. Delete NAT Gateway when not needed
+4. Use internal services instead of LoadBalancers
+
+---
+
+## Files Reference
+
+```
+terraform/
+├── main.tf              # Provider config
+├── variables.tf         # Input variables
+├── vpc.tf               # VPC, subnets, NAT
+├── eks.tf               # EKS cluster, nodes
+├── ecr.tf               # ECR repositories
+├── iam.tf               # IAM roles
+├── outputs.tf           # Output values
+└── terraform.tfvars     # Your values (gitignored)
+
+k8s/
+├── namespace.yaml       # mlops namespace
+├── secrets.yaml         # Credentials (gitignored)
+├── volumes.yaml         # PVCs
+├── redis.yaml           # Redis
+├── qdrant.yaml          # Qdrant
+├── prometheus.yaml      # Prometheus
+├── grafana.yaml         # Grafana
+├── fastapi.yaml         # Backend
+├── frontend.yaml        # Frontend
+└── monitoring-app.yaml  # Monitoring
+```
+
+
+## Check what's running
+
+# Check EKS clusters
+aws eks list-clusters --region us-east-1
+
+# Check EC2 instances  
+aws ec2 describe-instances --region us-east-1 --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType]' --output table
+
+# Check LoadBalancers (these cost money!)
+aws elbv2 describe-load-balancers --region us-east-1 --query 'LoadBalancers[*].[LoadBalancerName,State.Code]' --output table
+
+# Check NAT Gateways (these cost ~$32/month each!)
+aws ec2 describe-nat-gateways --region us-east-1 --query 'NatGateways[*].[NatGatewayId,State]' --output table
+
+# Check ECR repositories
+aws ecr describe-repositories --region us-east-1 --query 'repositories[*].repositoryName' --output table
