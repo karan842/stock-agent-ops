@@ -59,6 +59,32 @@ echo "Step 4: Cleaning up CloudWatch Log Groups..."
 aws logs delete-log-group --log-group-name "/aws/eks/$CLUSTER_NAME/cluster" --region $AWS_REGION 2>/dev/null || true
 echo "  Log groups deleted."
 
+# 5. Explicit Cleanup of Orphaned Networking (IPs & SGs)
+echo "Step 5: Cleaning up Orphaned Networking..."
+# Release all unassociated EIPs
+echo "  Checking for unassociated Elastic IPs..."
+UNATTACHED_EIPS=$(aws ec2 describe-addresses --region $AWS_REGION --filters "Name=association-id,Values=null" --query "Addresses[*].AllocationId" --output text)
+if [ ! -z "$UNATTACHED_EIPS" ]; then
+    for EIP in $UNATTACHED_EIPS; do
+        echo "    Releasing EIP: $EIP"
+        aws ec2 release-address --allocation-id $EIP --region $AWS_REGION
+    done
+else
+    echo "    No unassociated EIPs found."
+fi
+
+# Attempt to delete Security Groups with 'mlops' in the name (Best effort)
+echo "  Checking for leftover Security Groups (mlops)..."
+SG_IDS=$(aws ec2 describe-security-groups --region $AWS_REGION --filters "Name=group-name,Values=*mlops*" --query "SecurityGroups[*].GroupId" --output text)
+if [ ! -z "$SG_IDS" ]; then
+    for SG in $SG_IDS; do
+        echo "    Attempting to delete SG: $SG"
+        aws ec2 delete-security-group --group-id $SG --region $AWS_REGION 2>/dev/null || echo "    Could not delete $SG (likely still in use or dependent)."
+    done
+else
+    echo "    No 'mlops' Security Groups found."
+fi
+
 # 5. Final Verification (The "100% Clean" Check)
 echo "================================================================="
 echo "Final Verification Report (Should all be empty/terminated):"

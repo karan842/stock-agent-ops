@@ -1,10 +1,29 @@
+# =============================================================================
+# Persistent Volume Claims
+# =============================================================================
+
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mlops-outputs-pvc
+  namespace: mlops
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: gp2
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data-pvc
+  namespace: mlops
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: gp2
   resources:
     requests:
       storage: 2Gi
@@ -12,21 +31,12 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: redis-data-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: qdrant-storage-pvc
+  namespace: mlops
 spec:
   accessModes:
     - ReadWriteOnce
+  storageClassName: gp2
   resources:
     requests:
-      storage: 1Gi
+      storage: 2Gi

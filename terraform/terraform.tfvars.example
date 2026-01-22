@@ -1,0 +1,21 @@
+# =============================================================================
+# Terraform Variables - Example File
+# =============================================================================
+# Copy this file to terraform.tfvars and customize values
+# Do NOT commit terraform.tfvars to version control
+
+aws_region = "us-east-1"
+environment = "dev"
+
+# EKS Cluster
+cluster_name    = "mlops-stock-cluster"
+cluster_version = "1.29"
+
+# Node Group
+node_instance_type = "t3.medium"
+node_desired_size  = 2
+node_min_size      = 1
+node_max_size      = 3
+
+# VPC
+vpc_cidr = "10.0.0.0/16"
