@@ -46,10 +46,11 @@ jobs:
 
     - name: Get ECR Registry
       id: ecr-registry
-      run: echo "registry=$(terraform output -raw account_id).dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_OUTPUT
-
-    outputs:
-      ecr_registry: ${{ steps.ecr-registry.outputs.registry }}
+      run: |
+        # Try to get from terraform, otherwise construct it
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+        echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
 
   deploy_apps:
     name: Build and Deploy Apps
