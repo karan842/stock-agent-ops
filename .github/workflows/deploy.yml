@@ -52,6 +52,9 @@ jobs:
         REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
         echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
 
+    outputs:
+      ecr_registry: ${{ steps.ecr-registry.outputs.registry }}
+
   deploy_apps:
     name: Build and Deploy Apps
     needs: infrastructure
