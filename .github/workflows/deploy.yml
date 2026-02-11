@@ -48,7 +48,7 @@ jobs:
       id: ecr-registry
       run: |
         # Try to get from terraform, otherwise construct it
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text | tr -d '[:space:]')
         REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
         echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
 
@@ -64,6 +64,12 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v3
+
+    - name: Debug Output
+      env:
+        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
+      run: |
+        echo "DEBUG: ECR_REGISTRY is '${ECR_REGISTRY}'"
 
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v1
