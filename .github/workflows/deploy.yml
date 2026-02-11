@@ -7,19 +7,19 @@ on:
 
 env:
   AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: mlops-stock-cluster
   ECR_REPOSITORY_FASTAPI: mlops-fastapi
   ECR_REPOSITORY_FRONTEND: mlops-frontend
   ECR_REPOSITORY_MONITORING: mlops-monitoring
-  EKS_CLUSTER_NAME: mlops-stock-cluster
 
 jobs:
-  infrastructure:
-    name: Provision Infrastructure
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
     environment: production
     defaults:
       run:
-        working-directory: terraform
+        working-directory: .
 
     steps:
     - name: Checkout
@@ -39,55 +39,26 @@ jobs:
         terraform_wrapper: false
 
     - name: Terraform Init
+      working-directory: terraform
       run: terraform init
 
     - name: Terraform Apply
+      working-directory: terraform
       run: terraform apply -auto-approve -var="aws_region=${{ env.AWS_REGION }}"
-
-    - name: Get ECR Registry
-      id: ecr-registry
-      run: |
-        # Try to get from terraform, otherwise construct it
-        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text | tr -d '[:space:]')
-        REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
-        echo "registry=${REGISTRY}" >> $GITHUB_OUTPUT
-
-    outputs:
-      ecr_registry: ${{ steps.ecr-registry.outputs.registry }}
-
-  deploy_apps:
-    name: Build and Deploy Apps
-    needs: infrastructure
-    runs-on: ubuntu-latest
-    environment: production
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Debug Output
-      env:
-        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
-      run: |
-        echo "DEBUG: ECR_REGISTRY is '${ECR_REGISTRY}'"
-
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v1
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
 
-    # Define registry from `needs` or derive it again (deriving is safer if separate jobs)
-    # Using the output from infrastructure job
-    
+    - name: Set ECR Registry
+      id: vars
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text | tr -d '[:space:]')
+        REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
+        echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
+
     - name: Build and Push FastAPI
       env:
-        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest ./backend
@@ -96,7 +67,6 @@ jobs:
 
     - name: Build and Push Frontend
       env:
-        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest ./frontend
@@ -105,7 +75,6 @@ jobs:
 
     - name: Build and Push Monitoring
       env:
-        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
         IMAGE_TAG: ${{ github.sha }}
       run: |
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:latest ./monitoring_app
@@ -136,8 +105,6 @@ jobs:
         EOF
 
     - name: Deploy to EKS
-      env:
-        ECR_REGISTRY: ${{ needs.infrastructure.outputs.ecr_registry }}
       run: |
         # Update manifest images
         sed -i "s|<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com|$ECR_REGISTRY|g" k8s/*.yaml
