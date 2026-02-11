@@ -1,7 +1,7 @@
 # =============================================================================
 # Monitoring Dashboard (Streamlit) Deployment
 # =============================================================================
-# NOTE: Replace <AWS_ACCOUNT_ID> with your actual AWS account ID
+# NOTE: Replace 585662413932 with your actual AWS account ID
 
 apiVersion: apps/v1
 kind: Deployment
@@ -21,7 +21,7 @@ spec:
       containers:
       - name: monitoring-app
         # Replace with your ECR URL after terraform apply
-        image: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/mlops-monitoring:latest
+        image: 585662413932.dkr.ecr.us-east-1.amazonaws.com/mlops-monitoring:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 8502
