@@ -12,18 +12,12 @@ terraform {
     }
   }
 
-  # REMOTE BACKEND CONFIGURATION
-  # This is required for GitHub Actions to prevent state corruption.
-  # We will use S3 for state storage and DynamoDB for state locking.
-  # The bucket name will be dynamic based on user variables if we were using a template,
-  # but for now we hardcode a unique name pattern.
-  # Run `scripts/setup_tf_backend.sh` to create these resources first.
+  # Remote state in S3 so CI/CD remembers what infrastructure exists
   backend "s3" {
-    bucket         = "mlops-stock-agent-params-tfstate" # Unique bucket name
-    key            = "terraform.tfstate"
-    region         = "us-east-1"
-    encrypt        = true
-    dynamodb_table = "mlops-stock-agent-params-tf-lock" # DynamoDB table for locking
+    bucket  = "mlops-stock-agent-params-tfstate"
+    key     = "terraform.tfstate"
+    region  = "us-east-1"
+    encrypt = true
   }
 }
 
