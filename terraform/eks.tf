@@ -14,8 +14,6 @@ resource "aws_eks_cluster" "main" {
     security_group_ids      = [aws_security_group.eks_cluster.id]
   }
 
-  enabled_cluster_log_types = ["api", "audit", "authenticator"]
-
   depends_on = [
     aws_iam_role_policy_attachment.eks_cluster_policy,
     aws_iam_role_policy_attachment.eks_vpc_resource_controller,
@@ -122,8 +120,27 @@ resource "aws_eks_addon" "kube_proxy" {
 }
 
 resource "aws_eks_addon" "ebs_csi_driver" {
-  cluster_name = aws_eks_cluster.main.name
-  addon_name   = "aws-ebs-csi-driver"
+  cluster_name             = aws_eks_cluster.main.name
+  addon_name               = "aws-ebs-csi-driver"
+  service_account_role_arn = aws_iam_role.ebs_csi_driver.arn
 
   depends_on = [aws_eks_node_group.main]
+}
+
+# =============================================================================
+# OIDC PROVIDER (for IRSA - IAM Roles for Service Accounts)
+# =============================================================================
+
+data "tls_certificate" "eks" {
+  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+}
+
+resource "aws_iam_openid_connect_provider" "eks" {
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+
+  tags = {
+    Name = "${var.cluster_name}-oidc"
+  }
 }

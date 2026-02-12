@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 
   # REMOTE BACKEND CONFIGURATION
@@ -15,11 +19,11 @@ terraform {
   # but for now we hardcode a unique name pattern.
   # Run `scripts/setup_tf_backend.sh` to create these resources first.
   backend "s3" {
-    bucket         = "mlops-stock-agent-params-tfstate"  # Unique bucket name
+    bucket         = "mlops-stock-agent-params-tfstate" # Unique bucket name
     key            = "terraform.tfstate"
     region         = "us-east-1"
     encrypt        = true
-    dynamodb_table = "mlops-stock-agent-params-tf-lock"  # DynamoDB table for locking
+    dynamodb_table = "mlops-stock-agent-params-tf-lock" # DynamoDB table for locking
   }
 }
 

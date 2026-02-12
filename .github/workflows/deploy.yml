@@ -38,6 +38,11 @@ jobs:
         terraform_version: 1.5.0
         terraform_wrapper: false
 
+    - name: Setup Terraform Backend
+      run: |
+        chmod +x scripts/setup_tf_backend.sh
+        ./scripts/setup_tf_backend.sh
+
     - name: Terraform Init
       working-directory: terraform
       run: terraform init
@@ -106,8 +111,9 @@ jobs:
 
     - name: Deploy to EKS
       run: |
-        # Update manifest images
-        sed -i "s|<AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com|$ECR_REGISTRY|g" k8s/*.yaml
+        # Update manifest images with actual ECR registry
+        sed -i "s|[0-9]\{12\}\.dkr\.ecr\.[a-z0-9-]*\.amazonaws\.com|$ECR_REGISTRY|g" k8s/*.yaml
+        sed -i "s|ECR_REGISTRY_PLACEHOLDER|$ECR_REGISTRY|g" k8s/*.yaml
 
         # Deploy
         kubectl apply -f k8s/namespace.yaml
