@@ -1,15 +1,10 @@
-
 FROM python:3.13-slim
 
 WORKDIR /frontend
 
-# Install uv for dependency management
-RUN pip install uv
-
 COPY . /frontend
 
-# Install dependencies via uv (system-wide)
-RUN uv pip install --system -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8501
 
