@@ -63,6 +63,12 @@ jobs:
         REGISTRY="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com"
         echo "ECR_REGISTRY=${REGISTRY}" >> $GITHUB_ENV
 
+    - name: Free disk space
+      run: |
+        docker system prune -af
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+        df -h
+
     - name: Build and Push FastAPI
       env:
         IMAGE_TAG: ${{ github.sha }}
@@ -70,6 +76,7 @@ jobs:
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest ./backend
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest
+        docker rmi $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY_FASTAPI:latest || true
 
     - name: Build and Push Frontend
       env:
@@ -78,6 +85,7 @@ jobs:
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest ./frontend
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest
+        docker rmi $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY_FRONTEND:latest || true
 
     - name: Build and Push Monitoring
       env:
@@ -86,6 +94,7 @@ jobs:
         docker build -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:latest ./monitoring_app
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:$IMAGE_TAG
         docker push $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:latest
+        docker rmi $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY_MONITORING:latest || true
 
     - name: Update kubeconfig
       run: aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
