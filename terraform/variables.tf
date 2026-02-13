@@ -32,6 +32,12 @@ variable "node_instance_type" {
   default     = "t3.xlarge"
 }
 
+variable "node_disk_size" {
+  description = "Disk size in GB for EKS nodes"
+  type        = number
+  default     = 50
+}
+
 variable "node_desired_size" {
   description = "Desired number of nodes in the node group"
   type        = number
